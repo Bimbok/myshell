@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# MyShell Quick Installation Script
-# For GitHub repo: Bimbok/myshell
+# MyShell Installation Script - Fixed to compile from source
 
 set -e
 
@@ -9,6 +8,7 @@ SHELL_NAME="myshell"
 INSTALL_DIR="/usr/local/bin"
 REPO_URL="https://github.com/Bimbok/myshell.git"
 TEMP_DIR="/tmp/myshell-install"
+SOURCE_FILE="myshell.c" # Added source file name
 
 # Colors for output
 RED='\033[0;31m'
@@ -45,40 +45,47 @@ check_root() {
     fi
 }
 
-# Download and install pre-compiled binary
-install_shell() {
-    print_info "Downloading MyShell from GitHub..."
+# Compile from source (Replaced the flawed download function)
+compile_and_install() {
+    print_info "Cloning repository from GitHub..."
     
-    # Create temporary directory
+    # Check for git
+    if ! command -v git &> /dev/null; then
+        print_error "git is not available. Please install git to continue."
+        exit 1
+    fi
+    
+    # Create and enter temporary directory
     rm -rf "$TEMP_DIR"
     mkdir -p "$TEMP_DIR"
     cd "$TEMP_DIR"
     
-    # Download the binary directly from GitHub
-    print_info "Fetching the latest MyShell binary..."
+    git clone --depth 1 "$REPO_URL" . # Use --depth 1 to speed up clone
     
-    # Try to download pre-compiled binary from releases
-    if command -v wget &> /dev/null; then
-        if wget -O "$SHELL_NAME" "https://github.com/Bimbok/myshell/myshell" 2>/dev/null; then
-            print_success "Downloaded pre-compiled binary"
-        else
-            print_warning "Pre-compiled binary not found, compiling from source..."
-            compile_from_source
-        fi
-    elif command -v curl &> /dev/null; then
-        if curl -L -o "$SHELL_NAME" "https://github.com/Bimbok/myshell/myshell" 2>/dev/null; then
-            print_success "Downloaded pre-compiled binary"
-        else
-            print_warning "Pre-compiled binary not found, compiling from source..."
-            compile_from_source
-        fi
-    else
-        print_warning "Neither wget nor curl available, compiling from source..."
-        compile_from_source
+    # Check if source file exists
+    if [[ ! -f "$SOURCE_FILE" ]]; then
+        print_error "Source file $SOURCE_FILE not found in repository"
+        exit 1
     fi
     
-    # Make executable
-    chmod +x "$SHELL_NAME"
+    print_info "Compiling MyShell..."
+    
+    # Check for GCC
+    if ! command -v gcc &> /dev/null; then
+        print_error "GCC compiler not found. Please install gcc (e.g., 'sudo apt install build-essential')."
+        exit 1
+    fi
+    
+    # Compile the shell with necessary libraries (e.g., -lm for math if used, -lncurses for better TUI, etc. - based on myshell.c, none needed but good practice)
+    # The provided myshell.c only needs standard libs
+    gcc -o "$SHELL_NAME" "$SOURCE_FILE" -O2 -Wall -Wextra
+    
+    if [[ $? -ne 0 ]]; then
+        print_error "Compilation failed!"
+        exit 1
+    fi
+    
+    print_success "Compilation completed successfully"
     
     # Install to /usr/local/bin
     print_info "Installing to $INSTALL_DIR..."
@@ -91,49 +98,11 @@ install_shell() {
     print_success "MyShell installed successfully to $INSTALL_DIR/$SHELL_NAME"
 }
 
-# Compile from source if binary not available
-compile_from_source() {
-    print_info "Cloning repository from GitHub..."
-    
-    if command -v git &> /dev/null; then
-        git clone "$REPO_URL" .
-    else
-        print_error "git is not available. Please install git or download the binary manually."
-        exit 1
-    fi
-    
-    # Check if source file exists
-    if [[ ! -f "myshell.c" ]]; then
-        print_error "Source file myshell.c not found in repository"
-        exit 1
-    fi
-    
-    print_info "Compiling MyShell..."
-    
-    # Check for GCC
-    if ! command -v gcc &> /dev/null; then
-        print_error "GCC compiler not found. Please install gcc:"
-        print_info "Ubuntu/Debian: sudo apt install gcc"
-        print_info "CentOS/RHEL: sudo yum install gcc"
-        print_info "Arch: sudo pacman -S gcc"
-        exit 1
-    fi
-    
-    # Compile the shell
-    gcc -o "$SHELL_NAME" myshell.c -O2 -Wall -Wextra
-    
-    if [[ $? -ne 0 ]]; then
-        print_error "Compilation failed!"
-        exit 1
-    fi
-    
-    print_success "Compilation completed successfully"
-}
-
 # Add to /etc/shells
 add_to_shells() {
-    if ! grep -q "$INSTALL_DIR/$SHELL_NAME" /etc/shells; then
-        echo "$INSTALL_DIR/$SHELL_NAME" >> /etc/shells
+    local full_path="$INSTALL_DIR/$SHELL_NAME"
+    if ! grep -q "^$full_path$" /etc/shells; then # Added anchors for exact match
+        echo "$full_path" >> /etc/shells
         print_success "Added MyShell to /etc/shells"
     else
         print_info "MyShell already in /etc/shells"
@@ -150,8 +119,8 @@ main() {
     check_root
     
     print_info "Starting MyShell installation..."
-    install_shell
-    
+    compile_and_install # Calls the new compile and install function
+ 
     echo ""
     print_success "🎉 Installation completed!"
     echo ""
@@ -160,14 +129,14 @@ main() {
     if command -v "$SHELL_NAME" &> /dev/null; then
         print_success "MyShell is now available at: $INSTALL_DIR/$SHELL_NAME"
     else
-        print_warning "Installation complete but may need to reload your shell:"
+        print_warning "Installation complete but the command may not be immediately available."
         print_info "Run: source ~/.bashrc or restart your terminal"
     fi
     
     echo ""
     print_info "Quick start:"
     print_info "  Run MyShell: $SHELL_NAME"
-    print_info "  Make login shell: sudo $0 --set-login"
+    print_info "  Setup for login shell: sudo $0 --set-login"
     echo ""
     print_info "For more info: $SHELL_NAME then type 'help'"
 }
@@ -198,7 +167,7 @@ show_usage() {
     echo "  --help         Show this help message"
     echo ""
     echo "Examples:"
-    echo "  sudo $0           # Install MyShell"
+    echo "  sudo $0           # Install MyShell (compiles from source)"
     echo "  sudo $0 --set-login # Setup for login shell"
     echo ""
     echo "After installation, run: myshell"

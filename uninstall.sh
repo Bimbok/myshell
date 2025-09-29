@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# MyShell Uninstallation Script
+# MyShell Uninstallation Script - Fixed login shell check
 
 set -e
 
@@ -44,10 +44,11 @@ check_root() {
 
 # Remove from /etc/shells
 remove_from_shells() {
-    if grep -q "$INSTALL_DIR/$SHELL_NAME" /etc/shells; then
+    local full_path="$INSTALL_DIR/$SHELL_NAME"
+    if grep -q "^$full_path$" /etc/shells; then # Added anchors for exact match
         # Create backup and remove
-        cp /etc/shells /etc/shells.backup.$(date +%Y%m%d)
-        grep -v "$INSTALL_DIR/$SHELL_NAME" /etc/shells > /etc/shells.tmp
+        cp /etc/shells "/etc/shells.backup.$(date +%Y%m%d_%H%M%S)" # More precise backup name
+        grep -v "^$full_path$" /etc/shells > /etc/shells.tmp # Added anchors for exact match
         mv /etc/shells.tmp /etc/shells
         print_success "Removed MyShell from /etc/shells"
     else
@@ -55,14 +56,18 @@ remove_from_shells() {
     fi
 }
 
-# Check if user is using myshell as current shell
+# Check if the *original* user is using myshell as login shell
 check_current_shell() {
-    local current_shell=$(getent passwd $(whoami) | cut -d: -f7)
-    if [[ "$current_shell" == "$INSTALL_DIR/$SHELL_NAME" ]]; then
-        print_warning "⚠️  WARNING: You are currently using MyShell as your login shell!"
-        print_warning "Changing your shell back to bash before uninstallation is recommended."
+    # Check the shell for the user who called sudo (if any)
+    local target_user="${SUDO_USER:-$(whoami)}" # Use SUDO_USER if available, otherwise current user
+    local login_shell=$(getent passwd "$target_user" | cut -d: -f7) # Get the 7th field (shell) from passwd entry
+    local myshell_path="$INSTALL_DIR/$SHELL_NAME"
+
+    if [[ "$login_shell" == "$myshell_path" ]]; then
+        print_warning "⚠️  WARNING: The user '$target_user' is currently using MyShell as their login shell!"
+        print_warning "This script will remove the binary, which will prevent '$target_user' from logging in."
         echo ""
-        print_info "To change back to bash, run:"
+        print_info "To change back to a default shell (e.g., bash), '$target_user' should run:"
         print_info "  chsh -s /bin/bash"
         echo ""
         read -p "Do you want to continue with uninstallation? (y/N): " -n 1 -r
@@ -82,16 +87,17 @@ main() {
     echo ""
     
     check_root
-    check_current_shell
+    check_current_shell # Check the actual user's login shell
     
     print_info "Starting MyShell uninstallation..."
     
     # Remove binary
-    if [[ -f "$INSTALL_DIR/$SHELL_NAME" ]]; then
-        rm -f "$INSTALL_DIR/$SHELL_NAME"
-        print_success "Removed $INSTALL_DIR/$SHELL_NAME"
+    local full_path="$INSTALL_DIR/$SHELL_NAME"
+    if [[ -f "$full_path" ]]; then
+        rm -f "$full_path"
+        print_success "Removed $full_path"
     else
-        print_warning "MyShell not found in $INSTALL_DIR"
+        print_warning "MyShell binary not found at $full_path"
     fi
     
     # Remove from /etc/shells
@@ -99,22 +105,25 @@ main() {
     
     # Inform about history files
     echo ""
-    print_info "Note: User history files (~/.myshell_history) were not removed"
+    print_info "Note: User history files (~/.myshell_history) were not removed."
     print_info "To remove your personal history file, run:"
     print_info "  rm -f ~/.myshell_history"
     
     echo ""
     print_success "🎉 MyShell uninstalled successfully!"
     
-    # Final warning if shell was changed
-    local current_shell=$(getent passwd $(whoami) | cut -d: -f7)
-    if [[ "$current_shell" == "$INSTALL_DIR/$SHELL_NAME" ]]; then
+    # Final warning if shell was changed (using the same robust check)
+    local target_user="${SUDO_USER:-$(whoami)}"
+    local login_shell=$(getent passwd "$target_user" | cut -d: -f7)
+    local myshell_path="$INSTALL_DIR/$SHELL_NAME"
+    
+    if [[ "$login_shell" == "$myshell_path" ]]; then
         echo ""
-        print_warning "⚠️  IMPORTANT: Your login shell is still set to MyShell!"
-        print_warning "You won't be able to login until you change it back."
+        print_warning "⚠️  IMPORTANT: The user '$target_user's login shell is still set to the old MyShell path!"
+        print_warning "The user won't be able to login until the shell is changed."
         echo ""
-        print_info "To change back to bash, run:"
-        print_info "  chsh -s /bin/bash"
+        print_info "To change back, the user '$target_user' (or root) should run:"
+        print_info "  chsh -s /bin/bash $target_user"
     fi
 }
 
@@ -127,10 +136,10 @@ show_usage() {
     echo "This will:"
     echo "  - Remove MyShell binary from $INSTALL_DIR"
     echo "  - Remove MyShell from /etc/shells"
-    echo "  - Preserve your history files (optional manual removal)"
+    echo "  - Preserve user history files (optional manual removal)"
     echo ""
-    echo "Note: If MyShell is your current login shell,"
-    echo "      change it back before uninstalling:"
+    echo "Note: If MyShell is your current login shell, you will be warned."
+    echo "      Change it back before uninstalling to avoid login issues:"
     echo "      chsh -s /bin/bash"
 }
 
