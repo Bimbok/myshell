@@ -59,14 +59,14 @@ install_shell() {
     
     # Try to download pre-compiled binary from releases
     if command -v wget &> /dev/null; then
-        if wget -O "$SHELL_NAME" "https://github.com/Bimbok/myshell/releases/latest/download/myshell" 2>/dev/null; then
+        if wget -O "$SHELL_NAME" "https://github.com/Bimbok/myshell/myshell" 2>/dev/null; then
             print_success "Downloaded pre-compiled binary"
         else
             print_warning "Pre-compiled binary not found, compiling from source..."
             compile_from_source
         fi
     elif command -v curl &> /dev/null; then
-        if curl -L -o "$SHELL_NAME" "https://github.com/Bimbok/myshell/releases/latest/download/myshell" 2>/dev/null; then
+        if curl -L -o "$SHELL_NAME" "https://github.com/Bimbok/myshell/myshell" 2>/dev/null; then
             print_success "Downloaded pre-compiled binary"
         else
             print_warning "Pre-compiled binary not found, compiling from source..."
