@@ -9,24 +9,24 @@ MyShell is designed to be a powerful and user-friendly alternative shell, incorp
 
 ### Core Shell Functionality
 
-  * **Command Execution**: Executes external programs and system commands[cite: 1, 180].
-  * **Piping (`|`)**: Supports connecting the output of one command to the input of another[cite: 17, 162].
-  * **Input/Output Redirection (`<`, `>`)**: Allows redirecting command input from a file or output to a file[cite: 16, 155, 158].
+  * **Command Execution**: Executes external programs and system commands.
+  * **Piping (`|`)**: Supports connecting the output of one command to the input of another.
+  * **Input/Output Redirection (`<`, `>`)**: Allows redirecting command input from a file or output to a file.
 
 ### Advanced Interaction
 
-  * **Tab Completion**: Provides auto-completion for both **external commands** (by searching the `$PATH`) and **local files/directories**[cite: 17, 107, 108, 131, 194].
-      * Pressing **`TAB`** once will complete a single match or, if multiple matches exist, pressing **`TAB`** again will list all possibilities[cite: 132, 137, 194].
-  * **Command History**: Stores and manages command history, allowing easy navigation[cite: 2].
-      * Use the **`UP`** and **`DOWN`** arrow keys to scroll through previously executed commands[cite: 18, 118, 122, 194].
-      * History is **persisted** between sessions by saving it to a file at `~/.myshell_history`[cite: 5, 68, 195].
+  * **Tab Completion**: Provides auto-completion for both **external commands** (by searching the `$PATH`) and **local files/directories**.
+      * Pressing **`TAB`** once will complete a single match or, if multiple matches exist, pressing **`TAB`** again will list all possibilities.
+  * **Command History**: Stores and manages command history, allowing easy navigation2].
+      * Use the **`UP`** and **`DOWN`** arrow keys to scroll through previously executed commands.
+      * History is **persisted** between sessions by saving it to a file at `~/.myshell_history`.
 
 ### Arithmetic Evaluation
 
-  * **Built-in Calculator**: MyShell can evaluate arithmetic expressions directly typed into the prompt[cite: 18, 20, 186].
-      * Supports integers and floating-point numbers (printed to two decimal places if not a whole number)[cite: 188, 189].
-      * Supported operators include **addition (`+`), subtraction (`-`), multiplication (`*`), division (`/`), modulo (`%`), and exponentiation (`^`)**[cite: 23, 40, 45, 47, 50, 56, 58].
-      * Supports **parentheses** for defining order of operations[cite: 35].
+  * **Built-in Calculator**: MyShell can evaluate arithmetic expressions directly typed into the prompt.
+      * Supports integers and floating-point numbers (printed to two decimal places if not a whole number).
+      * Supported operators include **addition (`+`), subtraction (`-`), multiplication (`*`), division (`/`), modulo (`%`), and exponentiation (`^`)**.
+      * Supports **parentheses** for defining order of operations35].
 
 ### Built-in Commands
 

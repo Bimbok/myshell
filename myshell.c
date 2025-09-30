@@ -95,9 +95,15 @@ int builtin_help(char** args) {
     printf("  - Tab completion for commands and files\n");
     printf("  - Command history with UP/DOWN arrows\n");
     printf("  - Arithmetic evaluation (e.g., 2+3, 10*5, 100/4)\n");
-    printf("  - Press TAB for auto-completion\n");
-    printf("  - Press UP/DOWN to navigate history\n");
-    printf("  - Type arithmetic expressions to evaluate them\n");
+    printf("  - Cursor navigation with LEFT/RIGHT arrows\n");
+    printf("  - Word-by-word navigation with CTRL+LEFT/RIGHT\n");
+    printf("\nKeyboard Shortcuts:\n");
+    printf("  - TAB: Auto-completion\n");
+    printf("  - UP/DOWN: Navigate history\n");
+    printf("  - LEFT/RIGHT: Move cursor character by character\n");
+    printf("  - CTRL+LEFT/RIGHT: Move cursor word by word\n");
+    printf("  - BACKSPACE: Delete character before cursor\n");
+    printf("  - CTRL+D: Exit shell\n");
     return 1;
 }
 
@@ -484,8 +490,8 @@ void display_prompt() {
 // Read input with tab completion
 char* read_input_with_completion() {
     char* input = malloc(MAX_INPUT);
-    int pos = 0;
-    int len = 0;
+    int cursor = 0;  // Current cursor position
+    int len = 0;     // Total length of input
     int temp_history_index = history_index;
     
     memset(input, 0, MAX_INPUT);
@@ -500,14 +506,14 @@ char* read_input_with_completion() {
             printf("\n");
             break;
         } else if (c == 27) {
-            // Escape sequence (arrow keys)
-            char seq[3];
+            // Escape sequence (arrow keys, etc.)
+            char seq[5];
             if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
             if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
             
             if (seq[0] == '[') {
                 if (seq[1] == 'A') {
-                    // Up arrow
+                    // Up arrow - navigate history
                     if (temp_history_index > 0) {
                         temp_history_index--;
                         
@@ -518,12 +524,12 @@ char* read_input_with_completion() {
                         // Copy history command to input
                         strcpy(input, history[temp_history_index]);
                         len = strlen(input);
-                        pos = len;
+                        cursor = len;
                         printf("%s", input);
                         fflush(stdout);
                     }
                 } else if (seq[1] == 'B') {
-                    // Down arrow
+                    // Down arrow - navigate history
                     if (temp_history_index < history_count - 1) {
                         temp_history_index++;
                         
@@ -534,7 +540,7 @@ char* read_input_with_completion() {
                         // Copy history command to input
                         strcpy(input, history[temp_history_index]);
                         len = strlen(input);
-                        pos = len;
+                        cursor = len;
                         printf("%s", input);
                         fflush(stdout);
                     } else if (temp_history_index == history_count - 1) {
@@ -547,8 +553,61 @@ char* read_input_with_completion() {
                         
                         memset(input, 0, MAX_INPUT);
                         len = 0;
-                        pos = 0;
+                        cursor = 0;
                         fflush(stdout);
+                    }
+                } else if (seq[1] == 'C') {
+                    // Right arrow - move cursor right
+                    if (cursor < len) {
+                        cursor++;
+                        printf("\033[C");  // Move cursor right
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == 'D') {
+                    // Left arrow - move cursor left
+                    if (cursor > 0) {
+                        cursor--;
+                        printf("\033[D");  // Move cursor left
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == '1') {
+                    // Check for Ctrl+Arrow (extended sequences)
+                    if (read(STDIN_FILENO, &seq[2], 1) == 1) {
+                        if (seq[2] == ';') {
+                            if (read(STDIN_FILENO, &seq[3], 1) == 1 && 
+                                read(STDIN_FILENO, &seq[4], 1) == 1) {
+                                if (seq[3] == '5') {
+                                    if (seq[4] == 'C') {
+                                        // Ctrl+Right - move word forward
+                                        while (cursor < len && input[cursor] != ' ') cursor++;
+                                        while (cursor < len && input[cursor] == ' ') cursor++;
+                                        
+                                        // Redraw line with cursor at new position
+                                        printf("\r\033[K");
+                                        display_prompt();
+                                        printf("%s", input);
+                                        for (int i = len; i > cursor; i--) {
+                                            printf("\033[D");
+                                        }
+                                        fflush(stdout);
+                                    } else if (seq[4] == 'D') {
+                                        // Ctrl+Left - move word backward
+                                        if (cursor > 0) cursor--;
+                                        while (cursor > 0 && input[cursor] == ' ') cursor--;
+                                        while (cursor > 0 && input[cursor - 1] != ' ') cursor--;
+                                        
+                                        // Redraw line with cursor at new position
+                                        printf("\r\033[K");
+                                        display_prompt();
+                                        printf("%s", input);
+                                        for (int i = len; i > cursor; i--) {
+                                            printf("\033[D");
+                                        }
+                                        fflush(stdout);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -557,15 +616,15 @@ char* read_input_with_completion() {
             input[len] = '\0';
             
             // Find the word to complete
-            int word_start = len - 1;
+            int word_start = cursor - 1;
             while (word_start >= 0 && !isspace(input[word_start])) {
                 word_start--;
             }
             word_start++;
             
             char partial[MAX_INPUT];
-            strncpy(partial, input + word_start, len - word_start);
-            partial[len - word_start] = '\0';
+            strncpy(partial, input + word_start, cursor - word_start);
+            partial[cursor - word_start] = '\0';
             
             int count;
             char** completions = get_completions(partial, &count);
@@ -575,18 +634,31 @@ char* read_input_with_completion() {
                 int partial_len = strlen(partial);
                 int completion_len = strlen(completions[0]);
                 
-                // Add the rest of the completion
-                for (int i = partial_len; i < completion_len && len < MAX_INPUT - 1; i++) {
-                    input[len++] = completions[0][i];
-                    printf("%c", completions[0][i]);
+                // Shift remaining text if needed
+                if (cursor < len) {
+                    memmove(input + word_start + completion_len, 
+                           input + cursor, 
+                           len - cursor);
                 }
-                pos = len;
+                
+                // Insert completion
+                memcpy(input + word_start, completions[0], completion_len);
+                len = len - partial_len + completion_len;
+                cursor = word_start + completion_len;
                 
                 // Add space after completion
-                if (len < MAX_INPUT - 1) {
+                if (cursor == len && len < MAX_INPUT - 1) {
                     input[len++] = ' ';
-                    printf(" ");
-                    pos = len;
+                    cursor++;
+                }
+                
+                // Redraw line
+                printf("\r\033[K");
+                display_prompt();
+                input[len] = '\0';
+                printf("%s", input);
+                for (int i = len; i > cursor; i--) {
+                    printf("\033[D");
                 }
             } else if (count > 1) {
                 // Multiple completions - show them
@@ -601,6 +673,9 @@ char* read_input_with_completion() {
                 display_prompt();
                 input[len] = '\0';
                 printf("%s", input);
+                for (int i = len; i > cursor; i--) {
+                    printf("\033[D");
+                }
             }
             
             // Free completions
@@ -612,10 +687,20 @@ char* read_input_with_completion() {
             fflush(stdout);
         } else if (c == 127 || c == 8) {
             // Backspace
-            if (len > 0) {
+            if (cursor > 0) {
+                // Shift text left
+                memmove(input + cursor - 1, input + cursor, len - cursor);
                 len--;
-                pos--;
-                printf("\b \b");
+                cursor--;
+                
+                // Redraw line
+                printf("\r\033[K");
+                display_prompt();
+                input[len] = '\0';
+                printf("%s", input);
+                for (int i = len; i > cursor; i--) {
+                    printf("\033[D");
+                }
                 fflush(stdout);
             }
         } else if (c == 4) {
@@ -626,11 +711,22 @@ char* read_input_with_completion() {
                 exit(0);
             }
         } else if (c >= 32 && c <= 126) {
-            // Printable character
+            // Printable character - insert at cursor position
             if (len < MAX_INPUT - 1) {
-                input[len++] = c;
-                pos++;
-                printf("%c", c);
+                // Shift text right to make room
+                memmove(input + cursor + 1, input + cursor, len - cursor);
+                input[cursor] = c;
+                len++;
+                cursor++;
+                
+                // Redraw from cursor position
+                printf("\r\033[K");
+                display_prompt();
+                input[len] = '\0';
+                printf("%s", input);
+                for (int i = len; i > cursor; i--) {
+                    printf("\033[D");
+                }
                 fflush(stdout);
             }
         }
@@ -847,6 +943,7 @@ int main(int argc, char** argv) {
     printf("MyShell v2.0 with Tab Completion & History\n");
     printf("Type 'help' for more information.\n");
     printf("Press TAB for auto-completion, UP/DOWN for history.\n");
+    printf("Use LEFT/RIGHT arrows to move cursor, CTRL+LEFT/RIGHT to jump words.\n");
     printf("You can also evaluate arithmetic expressions (e.g., 2+3, 10*5).\n\n");
     
     shell_loop();
