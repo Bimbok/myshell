@@ -16,6 +16,7 @@
 #define MAX_PIPES 10
 #define MAX_COMPLETIONS 256
 #define MAX_HISTORY 1000
+#define MAX_ALIASES 100
 
 // Terminal settings
 struct termios orig_termios;
@@ -24,6 +25,15 @@ struct termios orig_termios;
 char* history[MAX_HISTORY];
 int history_count = 0;
 int history_index = 0;
+
+// Aliases
+typedef struct {
+    char* name;
+    char* value;
+} Alias;
+
+Alias aliases[MAX_ALIASES];
+int alias_count = 0;
 
 // Function prototypes
 void display_prompt();
@@ -35,8 +45,13 @@ void handle_redirection(char** args);
 int builtin_cd(char** args);
 int builtin_exit(char** args);
 int builtin_help(char** args);
+int builtin_alias(char** args);
 int is_arithmetic_expression(char* str);
 double evaluate_expression(char* expr);
+void load_myshellrc();
+void add_alias(char* name, char* value);
+char* get_alias(char* name);
+char* expand_aliases(char* input);
 char** get_completions(char* partial, int* count);
 char** get_command_completions(char* partial, int* count);
 char** get_file_completions(char* partial, int* count);
@@ -50,14 +65,16 @@ void load_history_from_file();
 char* builtin_names[] = {
     "cd",
     "exit",
-    "help"
+    "help",
+    "alias"
 };
 
 // Built-in command functions
 int (*builtin_funcs[])(char**) = {
     &builtin_cd,
     &builtin_exit,
-    &builtin_help
+    &builtin_help,
+    &builtin_alias
 };
 
 int num_builtins() {
@@ -99,6 +116,7 @@ int builtin_help(char** args) {
     printf("  - Cursor navigation with LEFT/RIGHT arrows\n");
     printf("  - Word-by-word navigation with CTRL+LEFT/RIGHT\n");
     printf("  - Double-tap ESC to add 'sudo' at the beginning!\n");
+    printf("  - Aliases support via ~/.myshellrc\n");
     printf("\nKeyboard Shortcuts:\n");
     printf("  - TAB: Auto-completion\n");
     printf("  - UP/DOWN: Navigate history\n");
@@ -107,7 +125,211 @@ int builtin_help(char** args) {
     printf("  - ESC ESC (double tap): Add 'sudo' at the beginning\n");
     printf("  - BACKSPACE: Delete character before cursor\n");
     printf("  - CTRL+D: Exit shell\n");
+    printf("\n~/.myshellrc Support:\n");
+    printf("  - alias name='command': Create command alias\n");
+    printf("  - export VAR=value: Set environment variable\n");
+    printf("  - # comments: Add comments\n");
     return 1;
+}
+
+// Built-in: alias
+int builtin_alias(char** args) {
+    if (args[1] == NULL) {
+        // List all aliases
+        if (alias_count == 0) {
+            printf("No aliases defined.\n");
+        } else {
+            for (int i = 0; i < alias_count; i++) {
+                printf("alias %s='%s'\n", aliases[i].name, aliases[i].value);
+            }
+        }
+    } else {
+        // Parse alias definition: alias name='value' or alias name=value
+        char* equal = strchr(args[1], '=');
+        if (equal) {
+            *equal = '\0';
+            char* name = args[1];
+            char* value = equal + 1;
+            
+            // Remove quotes if present
+            if (value[0] == '\'' || value[0] == '"') {
+                value++;
+                int len = strlen(value);
+                if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
+                    value[len-1] = '\0';
+                }
+            }
+            
+            add_alias(name, value);
+            printf("alias %s='%s'\n", name, value);
+        } else {
+            // Show specific alias
+            char* value = get_alias(args[1]);
+            if (value) {
+                printf("alias %s='%s'\n", args[1], value);
+            } else {
+                printf("myshell: alias: %s: not found\n", args[1]);
+            }
+        }
+    }
+    return 1;
+}
+
+// Add or update an alias
+void add_alias(char* name, char* value) {
+    // Check if alias already exists
+    for (int i = 0; i < alias_count; i++) {
+        if (strcmp(aliases[i].name, name) == 0) {
+            free(aliases[i].value);
+            aliases[i].value = strdup(value);
+            return;
+        }
+    }
+    
+    // Add new alias
+    if (alias_count < MAX_ALIASES) {
+        aliases[alias_count].name = strdup(name);
+        aliases[alias_count].value = strdup(value);
+        alias_count++;
+    } else {
+        fprintf(stderr, "myshell: maximum number of aliases reached\n");
+    }
+}
+
+// Get alias value
+char* get_alias(char* name) {
+    for (int i = 0; i < alias_count; i++) {
+        if (strcmp(aliases[i].name, name) == 0) {
+            return aliases[i].value;
+        }
+    }
+    return NULL;
+}
+
+// Expand aliases in command
+char* expand_aliases(char* input) {
+    static char expanded[MAX_INPUT * 2];
+    char* result = expanded;
+    char temp[MAX_INPUT];
+    
+    strncpy(temp, input, MAX_INPUT);
+    
+    // Get first word (command)
+    char* first_word = strtok(temp, " \t");
+    if (!first_word) {
+        return input;
+    }
+    
+    // Check if it's an alias
+    char* alias_value = get_alias(first_word);
+    if (alias_value) {
+        // Replace with alias value
+        strcpy(result, alias_value);
+        
+        // Add remaining arguments
+        char* rest = input + strlen(first_word);
+        if (*rest) {
+            strcat(result, rest);
+        }
+        return result;
+    }
+    
+    return input;
+}
+
+// Load and execute .myshellrc
+void load_myshellrc() {
+    char* home = getenv("HOME");
+    if (!home) return;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshellrc", home);
+    
+    FILE* f = fopen(filepath, "r");
+    if (!f) return;
+    
+    printf("Loading ~/.myshellrc...\n");
+    
+    char line[MAX_INPUT];
+    int line_num = 0;
+    while (fgets(line, sizeof(line), f)) {
+        line_num++;
+        
+        // Remove newline
+        line[strcspn(line, "\n")] = 0;
+        
+        // Skip empty lines and comments
+        char* trimmed = line;
+        while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
+        if (*trimmed == '\0' || *trimmed == '#') continue;
+        
+        // Handle alias definitions
+        if (strncmp(trimmed, "alias ", 6) == 0) {
+            char* alias_def = trimmed + 6;
+            char* equal = strchr(alias_def, '=');
+            if (equal) {
+                *equal = '\0';
+                char* name = alias_def;
+                char* value = equal + 1;
+                
+                // Trim name
+                while (*name == ' ' || *name == '\t') name++;
+                char* name_end = name + strlen(name) - 1;
+                while (name_end > name && (*name_end == ' ' || *name_end == '\t')) {
+                    *name_end = '\0';
+                    name_end--;
+                }
+                
+                // Remove quotes from value
+                while (*value == ' ' || *value == '\t') value++;
+                if (*value == '\'' || *value == '"') {
+                    value++;
+                    int len = strlen(value);
+                    if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
+                        value[len-1] = '\0';
+                    }
+                }
+                
+                add_alias(name, value);
+            }
+        }
+        // Handle export statements
+        else if (strncmp(trimmed, "export ", 7) == 0) {
+            char* export_def = trimmed + 7;
+            char* equal = strchr(export_def, '=');
+            if (equal) {
+                *equal = '\0';
+                char* name = export_def;
+                char* value = equal + 1;
+                
+                // Trim name
+                while (*name == ' ' || *name == '\t') name++;
+                
+                // Remove quotes from value
+                while (*value == ' ' || *value == '\t') value++;
+                if (*value == '\'' || *value == '"') {
+                    value++;
+                    int len = strlen(value);
+                    if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
+                        value[len-1] = '\0';
+                    }
+                }
+                
+                setenv(name, value, 1);
+            }
+        }
+        // Execute other commands (like echo)
+        else {
+            char** args = parse_input(strdup(line));
+            if (args[0] != NULL) {
+                execute_command(args);
+            }
+            free(args);
+        }
+    }
+    
+    fclose(f);
+    printf("Loaded %d aliases from ~/.myshellrc\n", alias_count);
 }
 
 // Check if string is an arithmetic expression
@@ -972,9 +1194,12 @@ void shell_loop() {
         display_prompt();
         input = read_input_with_completion();
         
+        // Expand aliases
+        char* expanded = expand_aliases(input);
+        
         // Check if input is an arithmetic expression
-        if (is_arithmetic_expression(input)) {
-            double result = evaluate_expression(input);
+        if (is_arithmetic_expression(expanded)) {
+            double result = evaluate_expression(expanded);
             // Check if result is an integer
             if (result == (int)result) {
                 printf("%d\n", (int)result);
@@ -983,7 +1208,7 @@ void shell_loop() {
             }
             status = 1;
         } else {
-            args = parse_input(input);
+            args = parse_input(strdup(expanded));
             status = execute_command(args);
             free(args);
         }
@@ -1005,6 +1230,10 @@ int main(int argc, char** argv) {
     printf("Use LEFT/RIGHT arrows to move cursor, CTRL+LEFT/RIGHT to jump words.\n");
     printf("🎉 NEW: Double-tap ESC to add 'sudo' at the beginning!\n");
     printf("You can also evaluate arithmetic expressions (e.g., 2+3, 10*5).\n\n");
+    
+    // Load .myshellrc configuration
+    load_myshellrc();
+    printf("\n");
     
     shell_loop();
     
