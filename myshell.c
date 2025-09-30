@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <termios.h>
 #include <ctype.h>
+#include <sys/time.h>
 
 #define MAX_INPUT 1024
 #define MAX_ARGS 64
@@ -97,11 +98,13 @@ int builtin_help(char** args) {
     printf("  - Arithmetic evaluation (e.g., 2+3, 10*5, 100/4)\n");
     printf("  - Cursor navigation with LEFT/RIGHT arrows\n");
     printf("  - Word-by-word navigation with CTRL+LEFT/RIGHT\n");
+    printf("  - Double-tap ESC to add 'sudo' at the beginning!\n");
     printf("\nKeyboard Shortcuts:\n");
     printf("  - TAB: Auto-completion\n");
     printf("  - UP/DOWN: Navigate history\n");
     printf("  - LEFT/RIGHT: Move cursor character by character\n");
     printf("  - CTRL+LEFT/RIGHT: Move cursor word by word\n");
+    printf("  - ESC ESC (double tap): Add 'sudo' at the beginning\n");
     printf("  - BACKSPACE: Delete character before cursor\n");
     printf("  - CTRL+D: Exit shell\n");
     return 1;
@@ -493,6 +496,8 @@ char* read_input_with_completion() {
     int cursor = 0;  // Current cursor position
     int len = 0;     // Total length of input
     int temp_history_index = history_index;
+    struct timeval last_esc_time = {0, 0};
+    int esc_count = 0;
     
     memset(input, 0, MAX_INPUT);
     enable_raw_mode();
@@ -506,110 +511,164 @@ char* read_input_with_completion() {
             printf("\n");
             break;
         } else if (c == 27) {
-            // Escape sequence (arrow keys, etc.)
-            char seq[5];
-            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
-            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+            // ESC key or escape sequence
+            struct timeval current_time;
+            gettimeofday(&current_time, NULL);
             
-            if (seq[0] == '[') {
-                if (seq[1] == 'A') {
-                    // Up arrow - navigate history
-                    if (temp_history_index > 0) {
-                        temp_history_index--;
+            // Calculate time difference in milliseconds
+            long time_diff = (current_time.tv_sec - last_esc_time.tv_sec) * 1000 +
+                           (current_time.tv_usec - last_esc_time.tv_usec) / 1000;
+            
+            // Check if this is a second ESC within 500ms
+            if (time_diff < 500 && esc_count == 1) {
+                // Double ESC detected! Add sudo at the beginning
+                esc_count = 0;
+                
+                // Check if sudo is not already there
+                if (len < 5 || strncmp(input, "sudo ", 5) != 0) {
+                    // Shift everything right to make room for "sudo "
+                    if (len + 5 < MAX_INPUT - 1) {
+                        memmove(input + 5, input, len);
+                        memcpy(input, "sudo ", 5);
+                        len += 5;
+                        cursor += 5;
                         
-                        // Clear current line
+                        // Redraw line
                         printf("\r\033[K");
                         display_prompt();
-                        
-                        // Copy history command to input
-                        strcpy(input, history[temp_history_index]);
-                        len = strlen(input);
-                        cursor = len;
+                        input[len] = '\0';
                         printf("%s", input);
+                        for (int i = len; i > cursor; i--) {
+                            printf("\033[D");
+                        }
                         fflush(stdout);
-                    }
-                } else if (seq[1] == 'B') {
-                    // Down arrow - navigate history
-                    if (temp_history_index < history_count - 1) {
-                        temp_history_index++;
                         
-                        // Clear current line
-                        printf("\r\033[K");
-                        display_prompt();
-                        
-                        // Copy history command to input
-                        strcpy(input, history[temp_history_index]);
-                        len = strlen(input);
-                        cursor = len;
-                        printf("%s", input);
-                        fflush(stdout);
-                    } else if (temp_history_index == history_count - 1) {
-                        // Go to empty line
-                        temp_history_index = history_count;
-                        
-                        // Clear current line
-                        printf("\r\033[K");
-                        display_prompt();
-                        
-                        memset(input, 0, MAX_INPUT);
-                        len = 0;
-                        cursor = 0;
-                        fflush(stdout);
+                        printf("\a");  // Beep to confirm
                     }
-                } else if (seq[1] == 'C') {
-                    // Right arrow - move cursor right
-                    if (cursor < len) {
-                        cursor++;
-                        printf("\033[C");  // Move cursor right
-                        fflush(stdout);
-                    }
-                } else if (seq[1] == 'D') {
-                    // Left arrow - move cursor left
-                    if (cursor > 0) {
-                        cursor--;
-                        printf("\033[D");  // Move cursor left
-                        fflush(stdout);
-                    }
-                } else if (seq[1] == '1') {
-                    // Check for Ctrl+Arrow (extended sequences)
-                    if (read(STDIN_FILENO, &seq[2], 1) == 1) {
-                        if (seq[2] == ';') {
-                            if (read(STDIN_FILENO, &seq[3], 1) == 1 && 
-                                read(STDIN_FILENO, &seq[4], 1) == 1) {
-                                if (seq[3] == '5') {
-                                    if (seq[4] == 'C') {
-                                        // Ctrl+Right - move word forward
-                                        while (cursor < len && input[cursor] != ' ') cursor++;
-                                        while (cursor < len && input[cursor] == ' ') cursor++;
-                                        
-                                        // Redraw line with cursor at new position
-                                        printf("\r\033[K");
-                                        display_prompt();
-                                        printf("%s", input);
-                                        for (int i = len; i > cursor; i--) {
-                                            printf("\033[D");
+                }
+                continue;
+            }
+            
+            // Wait a bit to see if it's an escape sequence or standalone ESC
+            fd_set fds;
+            struct timeval timeout;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 50000;  // 50ms timeout
+            
+            int result = select(STDIN_FILENO + 1, &fds, NULL, NULL, &timeout);
+            
+            if (result > 0) {
+                // There's more input, it's an escape sequence (arrow keys, etc.)
+                char seq[5];
+                if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+                
+                if (seq[0] == '[') {
+                    if (seq[1] == 'A') {
+                        // Up arrow - navigate history
+                        if (temp_history_index > 0) {
+                            temp_history_index--;
+                            
+                            // Clear current line
+                            printf("\r\033[K");
+                            display_prompt();
+                            
+                            // Copy history command to input
+                            strcpy(input, history[temp_history_index]);
+                            len = strlen(input);
+                            cursor = len;
+                            printf("%s", input);
+                            fflush(stdout);
+                        }
+                    } else if (seq[1] == 'B') {
+                        // Down arrow - navigate history
+                        if (temp_history_index < history_count - 1) {
+                            temp_history_index++;
+                            
+                            // Clear current line
+                            printf("\r\033[K");
+                            display_prompt();
+                            
+                            // Copy history command to input
+                            strcpy(input, history[temp_history_index]);
+                            len = strlen(input);
+                            cursor = len;
+                            printf("%s", input);
+                            fflush(stdout);
+                        } else if (temp_history_index == history_count - 1) {
+                            // Go to empty line
+                            temp_history_index = history_count;
+                            
+                            // Clear current line
+                            printf("\r\033[K");
+                            display_prompt();
+                            
+                            memset(input, 0, MAX_INPUT);
+                            len = 0;
+                            cursor = 0;
+                            fflush(stdout);
+                        }
+                    } else if (seq[1] == 'C') {
+                        // Right arrow - move cursor right
+                        if (cursor < len) {
+                            cursor++;
+                            printf("\033[C");  // Move cursor right
+                            fflush(stdout);
+                        }
+                    } else if (seq[1] == 'D') {
+                        // Left arrow - move cursor left
+                        if (cursor > 0) {
+                            cursor--;
+                            printf("\033[D");  // Move cursor left
+                            fflush(stdout);
+                        }
+                    } else if (seq[1] == '1') {
+                        // Check for Ctrl+Arrow (extended sequences)
+                        if (read(STDIN_FILENO, &seq[2], 1) == 1) {
+                            if (seq[2] == ';') {
+                                if (read(STDIN_FILENO, &seq[3], 1) == 1 && 
+                                    read(STDIN_FILENO, &seq[4], 1) == 1) {
+                                    if (seq[3] == '5') {
+                                        if (seq[4] == 'C') {
+                                            // Ctrl+Right - move word forward
+                                            while (cursor < len && input[cursor] != ' ') cursor++;
+                                            while (cursor < len && input[cursor] == ' ') cursor++;
+                                            
+                                            // Redraw line with cursor at new position
+                                            printf("\r\033[K");
+                                            display_prompt();
+                                            printf("%s", input);
+                                            for (int i = len; i > cursor; i--) {
+                                                printf("\033[D");
+                                            }
+                                            fflush(stdout);
+                                        } else if (seq[4] == 'D') {
+                                            // Ctrl+Left - move word backward
+                                            if (cursor > 0) cursor--;
+                                            while (cursor > 0 && input[cursor] == ' ') cursor--;
+                                            while (cursor > 0 && input[cursor - 1] != ' ') cursor--;
+                                            
+                                            // Redraw line with cursor at new position
+                                            printf("\r\033[K");
+                                            display_prompt();
+                                            printf("%s", input);
+                                            for (int i = len; i > cursor; i--) {
+                                                printf("\033[D");
+                                            }
+                                            fflush(stdout);
                                         }
-                                        fflush(stdout);
-                                    } else if (seq[4] == 'D') {
-                                        // Ctrl+Left - move word backward
-                                        if (cursor > 0) cursor--;
-                                        while (cursor > 0 && input[cursor] == ' ') cursor--;
-                                        while (cursor > 0 && input[cursor - 1] != ' ') cursor--;
-                                        
-                                        // Redraw line with cursor at new position
-                                        printf("\r\033[K");
-                                        display_prompt();
-                                        printf("%s", input);
-                                        for (int i = len; i > cursor; i--) {
-                                            printf("\033[D");
-                                        }
-                                        fflush(stdout);
                                     }
                                 }
                             }
                         }
                     }
                 }
+            } else {
+                // No more input, it's a standalone ESC press
+                esc_count++;
+                gettimeofday(&last_esc_time, NULL);
             }
         } else if (c == '\t') {
             // Tab completion
@@ -940,10 +999,11 @@ int main(int argc, char** argv) {
     // Load command history
     load_history_from_file();
     
-    printf("MyShell v2.0 with Tab Completion & History\n");
+    printf("MyShell v3.0 - The Fun Shell!\n");
     printf("Type 'help' for more information.\n");
     printf("Press TAB for auto-completion, UP/DOWN for history.\n");
     printf("Use LEFT/RIGHT arrows to move cursor, CTRL+LEFT/RIGHT to jump words.\n");
+    printf("🎉 NEW: Double-tap ESC to add 'sudo' at the beginning!\n");
     printf("You can also evaluate arithmetic expressions (e.g., 2+3, 10*5).\n\n");
     
     shell_loop();
