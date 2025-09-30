@@ -10,6 +10,7 @@
 #include <termios.h>
 #include <ctype.h>
 #include <sys/time.h>
+#include <time.h>
 
 #define MAX_INPUT 1024
 #define MAX_ARGS 64
@@ -17,6 +18,8 @@
 #define MAX_COMPLETIONS 256
 #define MAX_HISTORY 1000
 #define MAX_ALIASES 100
+#define MAX_BOOKMARKS 50
+#define MAX_NOTES 200
 
 // Terminal settings
 struct termios orig_termios;
@@ -35,6 +38,15 @@ typedef struct {
 Alias aliases[MAX_ALIASES];
 int alias_count = 0;
 
+// Directory bookmarks
+typedef struct {
+    char* name;
+    char* path;
+} Bookmark;
+
+Bookmark bookmarks[MAX_BOOKMARKS];
+int bookmark_count = 0;
+
 // Function prototypes
 void display_prompt();
 char* read_input_with_completion();
@@ -46,12 +58,26 @@ int builtin_cd(char** args);
 int builtin_exit(char** args);
 int builtin_help(char** args);
 int builtin_alias(char** args);
+int builtin_mark(char** args);
+int builtin_jump(char** args);
+int builtin_marks(char** args);
+int builtin_unmark(char** args);
+int builtin_note(char** args);
+int builtin_notes(char** args);
+int builtin_clearnotes(char** args);
+int builtin_delnote(char** args);
 int is_arithmetic_expression(char* str);
 double evaluate_expression(char* expr);
 void load_myshellrc();
 void add_alias(char* name, char* value);
 char* get_alias(char* name);
 char* expand_aliases(char* input);
+void load_bookmarks();
+void save_bookmarks();
+void add_bookmark(char* name, char* path);
+char* get_bookmark(char* name);
+void save_note(char* note);
+void display_notes();
 char** get_completions(char* partial, int* count);
 char** get_command_completions(char* partial, int* count);
 char** get_file_completions(char* partial, int* count);
@@ -66,7 +92,15 @@ char* builtin_names[] = {
     "cd",
     "exit",
     "help",
-    "alias"
+    "alias",
+    "mark",
+    "jump",
+    "marks",
+    "unmark",
+    "note",
+    "notes",
+    "clearnotes",
+    "delnote"
 };
 
 // Built-in command functions
@@ -74,7 +108,15 @@ int (*builtin_funcs[])(char**) = {
     &builtin_cd,
     &builtin_exit,
     &builtin_help,
-    &builtin_alias
+    &builtin_alias,
+    &builtin_mark,
+    &builtin_jump,
+    &builtin_marks,
+    &builtin_unmark,
+    &builtin_note,
+    &builtin_notes,
+    &builtin_clearnotes,
+    &builtin_delnote
 };
 
 int num_builtins() {
@@ -129,6 +171,16 @@ int builtin_help(char** args) {
     printf("  - alias name='command': Create command alias\n");
     printf("  - export VAR=value: Set environment variable\n");
     printf("  - # comments: Add comments\n");
+    printf("\nDirectory Bookmarks:\n");
+    printf("  - mark <name>: Bookmark current directory\n");
+    printf("  - jump <name>: Jump to bookmarked directory\n");
+    printf("  - marks: List all bookmarks\n");
+    printf("  - unmark <name>: Remove bookmark\n");
+    printf("\nSession Notes:\n");
+    printf("  - note <text>: Add a note\n");
+    printf("  - notes: View all notes\n");
+    printf("  - delnote <n>: Delete note number N\n");
+    printf("  - clearnotes: Clear all notes\n");
     return 1;
 }
 
@@ -330,6 +382,348 @@ void load_myshellrc() {
     
     fclose(f);
     printf("Loaded %d aliases from ~/.myshellrc\n", alias_count);
+}
+
+// Directory Bookmarks Functions
+
+// Load bookmarks from file
+void load_bookmarks() {
+    char* home = getenv("HOME");
+    if (!home) return;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshell_bookmarks", home);
+    
+    FILE* f = fopen(filepath, "r");
+    if (!f) return;
+    
+    char line[MAX_INPUT];
+    while (fgets(line, sizeof(line), f) && bookmark_count < MAX_BOOKMARKS) {
+        line[strcspn(line, "\n")] = 0;
+        
+        char* sep = strchr(line, ':');
+        if (sep) {
+            *sep = '\0';
+            bookmarks[bookmark_count].name = strdup(line);
+            bookmarks[bookmark_count].path = strdup(sep + 1);
+            bookmark_count++;
+        }
+    }
+    
+    fclose(f);
+}
+
+// Save bookmarks to file
+void save_bookmarks() {
+    char* home = getenv("HOME");
+    if (!home) return;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshell_bookmarks", home);
+    
+    FILE* f = fopen(filepath, "w");
+    if (!f) return;
+    
+    for (int i = 0; i < bookmark_count; i++) {
+        fprintf(f, "%s:%s\n", bookmarks[i].name, bookmarks[i].path);
+    }
+    
+    fclose(f);
+}
+
+// Add or update a bookmark
+void add_bookmark(char* name, char* path) {
+    // Check if bookmark already exists
+    for (int i = 0; i < bookmark_count; i++) {
+        if (strcmp(bookmarks[i].name, name) == 0) {
+            free(bookmarks[i].path);
+            bookmarks[i].path = strdup(path);
+            save_bookmarks();
+            return;
+        }
+    }
+    
+    // Add new bookmark
+    if (bookmark_count < MAX_BOOKMARKS) {
+        bookmarks[bookmark_count].name = strdup(name);
+        bookmarks[bookmark_count].path = strdup(path);
+        bookmark_count++;
+        save_bookmarks();
+    } else {
+        fprintf(stderr, "myshell: maximum number of bookmarks reached\n");
+    }
+}
+
+// Get bookmark path
+char* get_bookmark(char* name) {
+    for (int i = 0; i < bookmark_count; i++) {
+        if (strcmp(bookmarks[i].name, name) == 0) {
+            return bookmarks[i].path;
+        }
+    }
+    return NULL;
+}
+
+// Built-in: mark
+int builtin_mark(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: mark: missing bookmark name\n");
+        fprintf(stderr, "Usage: mark <name>\n");
+        return 1;
+    }
+    
+    char cwd[1024];
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        perror("myshell: getcwd");
+        return 1;
+    }
+    
+    add_bookmark(args[1], cwd);
+    printf("📌 Bookmarked '%s' -> %s\n", args[1], cwd);
+    
+    return 1;
+}
+
+// Built-in: jump
+int builtin_jump(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: jump: missing bookmark name\n");
+        fprintf(stderr, "Usage: jump <name>\n");
+        return 1;
+    }
+    
+    char* path = get_bookmark(args[1]);
+    if (path == NULL) {
+        fprintf(stderr, "myshell: jump: bookmark '%s' not found\n", args[1]);
+        return 1;
+    }
+    
+    if (chdir(path) != 0) {
+        perror("myshell: jump");
+        return 1;
+    }
+    
+    printf("🚀 Jumped to '%s' (%s)\n", args[1], path);
+    
+    return 1;
+}
+
+// Built-in: marks
+int builtin_marks(char** args) {
+    if (bookmark_count == 0) {
+        printf("No bookmarks defined.\n");
+        printf("Use 'mark <name>' to bookmark current directory.\n");
+        return 1;
+    }
+    
+    printf("📚 Directory Bookmarks:\n");
+    for (int i = 0; i < bookmark_count; i++) {
+        printf("  %s -> %s\n", bookmarks[i].name, bookmarks[i].path);
+    }
+    
+    return 1;
+}
+
+// Built-in: unmark
+int builtin_unmark(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: unmark: missing bookmark name\n");
+        fprintf(stderr, "Usage: unmark <name>\n");
+        return 1;
+    }
+    
+    for (int i = 0; i < bookmark_count; i++) {
+        if (strcmp(bookmarks[i].name, args[1]) == 0) {
+            printf("🗑️  Removed bookmark '%s'\n", args[1]);
+            
+            // Free memory
+            free(bookmarks[i].name);
+            free(bookmarks[i].path);
+            
+            // Shift remaining bookmarks
+            for (int j = i; j < bookmark_count - 1; j++) {
+                bookmarks[j] = bookmarks[j + 1];
+            }
+            bookmark_count--;
+            
+            save_bookmarks();
+            return 1;
+        }
+    }
+    
+    fprintf(stderr, "myshell: unmark: bookmark '%s' not found\n", args[1]);
+    return 1;
+}
+
+// Session Notes Functions
+
+// Save a note
+void save_note(char* note) {
+    char* home = getenv("HOME");
+    if (!home) return;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshell_notes", home);
+    
+    FILE* f = fopen(filepath, "a");
+    if (!f) return;
+    
+    // Get current timestamp
+    time_t now = time(NULL);
+    struct tm* t = localtime(&now);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", t);
+    
+    fprintf(f, "[%s] %s\n", timestamp, note);
+    fclose(f);
+}
+
+// Display all notes
+void display_notes() {
+    char* home = getenv("HOME");
+    if (!home) return;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshell_notes", home);
+    
+    FILE* f = fopen(filepath, "r");
+    if (!f) {
+        printf("📝 No notes found.\n");
+        printf("Use 'note <text>' to add a note.\n");
+        return;
+    }
+    
+    printf("📝 Session Notes:\n");
+    printf("────────────────────────────────────────\n");
+    
+    char line[MAX_INPUT];
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        printf("%3d. %s", ++count, line);
+    }
+    
+    fclose(f);
+    
+    if (count == 0) {
+        printf("No notes found.\n");
+    }
+    printf("────────────────────────────────────────\n");
+    printf("Total: %d note(s)\n", count);
+    printf("Use 'delnote <n>' to delete a note or 'clearnotes' to delete all.\n");
+}
+
+// Built-in: note
+int builtin_note(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: note: missing note text\n");
+        fprintf(stderr, "Usage: note <text>\n");
+        return 1;
+    }
+    
+    // Reconstruct the full note text
+    char note[MAX_INPUT] = "";
+    for (int i = 1; args[i] != NULL; i++) {
+        if (i > 1) strcat(note, " ");
+        strcat(note, args[i]);
+    }
+    
+    save_note(note);
+    printf("✅ Note saved: %s\n", note);
+    
+    return 1;
+}
+
+// Built-in: notes
+int builtin_notes(char** args) {
+    display_notes();
+    return 1;
+}
+
+// Built-in: clearnotes
+int builtin_clearnotes(char** args) {
+    char* home = getenv("HOME");
+    if (!home) return 1;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshell_notes", home);
+    
+    // Ask for confirmation
+    printf("⚠️  Are you sure you want to delete ALL notes? (y/n): ");
+    fflush(stdout);
+    
+    char response[10];
+    if (fgets(response, sizeof(response), stdin)) {
+        if (response[0] == 'y' || response[0] == 'Y') {
+            if (remove(filepath) == 0) {
+                printf("✅ All notes cleared!\n");
+            } else {
+                printf("📝 No notes to clear.\n");
+            }
+        } else {
+            printf("❌ Cancelled.\n");
+        }
+    }
+    
+    return 1;
+}
+
+// Built-in: delnote
+int builtin_delnote(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: delnote: missing note number\n");
+        fprintf(stderr, "Usage: delnote <n>\n");
+        return 1;
+    }
+    
+    int note_num = atoi(args[1]);
+    if (note_num <= 0) {
+        fprintf(stderr, "myshell: delnote: invalid note number\n");
+        return 1;
+    }
+    
+    char* home = getenv("HOME");
+    if (!home) return 1;
+    
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/.myshell_notes", home);
+    
+    FILE* f = fopen(filepath, "r");
+    if (!f) {
+        printf("📝 No notes found.\n");
+        return 1;
+    }
+    
+    // Read all notes into memory
+    char notes[MAX_NOTES][MAX_INPUT];
+    int count = 0;
+    while (fgets(notes[count], MAX_INPUT, f) && count < MAX_NOTES) {
+        count++;
+    }
+    fclose(f);
+    
+    if (note_num > count) {
+        fprintf(stderr, "myshell: delnote: note number %d not found (total: %d)\n", note_num, count);
+        return 1;
+    }
+    
+    // Rewrite file without the deleted note
+    f = fopen(filepath, "w");
+    if (!f) {
+        perror("myshell: delnote");
+        return 1;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        if (i != note_num - 1) {  // Skip the note to delete (convert to 0-based index)
+            fprintf(f, "%s", notes[i]);
+        }
+    }
+    
+    fclose(f);
+    
+    printf("✅ Deleted note #%d\n", note_num);
+    
+    return 1;
 }
 
 // Check if string is an arithmetic expression
@@ -1224,11 +1618,16 @@ int main(int argc, char** argv) {
     // Load command history
     load_history_from_file();
     
+    // Load directory bookmarks
+    load_bookmarks();
+    
     printf("MyShell v3.0 - The Fun Shell!\n");
     printf("Type 'help' for more information.\n");
     printf("Press TAB for auto-completion, UP/DOWN for history.\n");
     printf("Use LEFT/RIGHT arrows to move cursor, CTRL+LEFT/RIGHT to jump words.\n");
     printf("🎉 NEW: Double-tap ESC to add 'sudo' at the beginning!\n");
+    printf("📌 NEW: Use 'mark' and 'jump' for directory bookmarks!\n");
+    printf("📝 NEW: Use 'note' to save session notes!\n");
     printf("You can also evaluate arithmetic expressions (e.g., 2+3, 10*5).\n\n");
     
     // Load .myshellrc configuration
