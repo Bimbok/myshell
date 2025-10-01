@@ -1098,11 +1098,96 @@ char** get_completions(char* partial, int* count) {
 // Display shell prompt
 void display_prompt() {
     char cwd[1024];
-    if (getcwd(cwd, sizeof(cwd)) != NULL) {
-        printf("\033[1;32m%s\033[0m $ ", cwd);
-    } else {
-        printf("myshell $ ");
+    char hostname[256];
+    char* username = getenv("USER");
+    const char *folder_icon = "";   // nf-fa-folder
+    const char *user_icon   = "";   // nf-fa-user
+    const char *star_icon   = "✦";   // star / sparkle
+    
+    // Get current working directory
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        strcpy(cwd, "?");
     }
+    
+    // Get hostname
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        strcpy(hostname, "localhost");
+    }
+    
+    // Replace home directory with ~
+    char* home = getenv("HOME");
+    char display_path[1024];
+    if (home && strncmp(cwd, home, strlen(home)) == 0) {
+        snprintf(display_path, sizeof(display_path), "~%s", cwd + strlen(home));
+    } else {
+        strcpy(display_path, cwd);
+    }
+    
+    // Get git branch if in a git repo
+    char git_branch[128] = "";
+    FILE* git = popen("git branch --show-current 2>/dev/null", "r");
+    if (git) {
+        if (fgets(git_branch, sizeof(git_branch), git)) {
+            git_branch[strcspn(git_branch, "\n")] = 0;
+        }
+        pclose(git);
+    }
+    
+    // Check git status
+    char git_status[16] = "";
+    if (strlen(git_branch) > 0) {
+        FILE* status = popen("git status --porcelain 2>/dev/null | wc -l", "r");
+        if (status) {
+            int changes = 0;
+            if (fscanf(status, "%d", &changes) == 1 && changes > 0) {
+                strcpy(git_status, "✗");
+            } else {
+                strcpy(git_status, "✓");
+            }
+            pclose(status);
+        }
+    }
+    
+    // Time
+    time_t now = time(NULL);
+    struct tm* t = localtime(&now);
+    char time_str[32];
+    strftime(time_str, sizeof(time_str), "%H:%M:%S", t);
+    
+    // Build the prompt with Nerd Font icons
+    // Line 1: User, host, time
+    printf("\033[1;36m╭─\033[0m"); // Cyan top-left corner
+    printf("\033[1;35m  \033[0m", username ? username : "user"); // Purple user icon
+    printf("\033[1;37m%s\033[0m", username ? username : "user"); // White username
+    printf("\033[1;32m 󰒋 \033[0m", hostname); // Green computer icon
+    printf("\033[1;37m%s\033[0m", hostname); // White hostname
+    printf(" \033[1;34m   \033[0m", time_str); // Blue clock icon
+    printf("\033[1;90m%s\033[0m", time_str); // Gray time
+    printf("\n");
+    
+    // Line 2: Directory and git info
+    printf("\033[1;36m├─  \033[0m"); // Cyan middle connector
+    printf("\033[1;34m \033[0m", display_path); // Blue folder icon
+    printf("\033[1;33m%s\033[0m", display_path); // Yellow path
+    
+    if (strlen(git_branch) > 0) {
+        printf("\033[1;35m  \033[0m", git_branch); // Purple git branch icon
+        printf("\033[1;37m%s\033[0m", git_branch); // White branch name
+        
+        if (strlen(git_status) > 0) {
+            if (strcmp(git_status, "✓") == 0) {
+                printf(" \033[1;32m%s\033[0m", git_status); // Green checkmark
+            } else {
+                printf(" \033[1;31m%s\033[0m", git_status); // Red X
+            }
+        }
+    }
+    printf("\n");
+    
+    // Line 3: Input line with prompt character
+    // printf("\033[1;36m╰─\033[0m"); // Cyan bottom-left corner
+    // printf("\033[1;32m❯\033[0m "); // Green arrow
+    
     fflush(stdout);
 }
 
@@ -1149,9 +1234,8 @@ char* read_input_with_completion() {
                         len += 5;
                         cursor += 5;
                         
-                        // Redraw line
+                        // Clear only the input line and redraw
                         printf("\r\033[K");
-                        display_prompt();
                         input[len] = '\0';
                         printf("%s", input);
                         for (int i = len; i > cursor; i--) {
@@ -1187,9 +1271,8 @@ char* read_input_with_completion() {
                         if (temp_history_index > 0) {
                             temp_history_index--;
                             
-                            // Clear current line
+                            // Clear current input line only
                             printf("\r\033[K");
-                            display_prompt();
                             
                             // Copy history command to input
                             strcpy(input, history[temp_history_index]);
@@ -1203,9 +1286,8 @@ char* read_input_with_completion() {
                         if (temp_history_index < history_count - 1) {
                             temp_history_index++;
                             
-                            // Clear current line
+                            // Clear current input line only
                             printf("\r\033[K");
-                            display_prompt();
                             
                             // Copy history command to input
                             strcpy(input, history[temp_history_index]);
@@ -1217,9 +1299,8 @@ char* read_input_with_completion() {
                             // Go to empty line
                             temp_history_index = history_count;
                             
-                            // Clear current line
+                            // Clear current input line only
                             printf("\r\033[K");
-                            display_prompt();
                             
                             memset(input, 0, MAX_INPUT);
                             len = 0;
@@ -1252,9 +1333,8 @@ char* read_input_with_completion() {
                                             while (cursor < len && input[cursor] != ' ') cursor++;
                                             while (cursor < len && input[cursor] == ' ') cursor++;
                                             
-                                            // Redraw line with cursor at new position
+                                            // Redraw input line only
                                             printf("\r\033[K");
-                                            display_prompt();
                                             printf("%s", input);
                                             for (int i = len; i > cursor; i--) {
                                                 printf("\033[D");
@@ -1266,9 +1346,8 @@ char* read_input_with_completion() {
                                             while (cursor > 0 && input[cursor] == ' ') cursor--;
                                             while (cursor > 0 && input[cursor - 1] != ' ') cursor--;
                                             
-                                            // Redraw line with cursor at new position
+                                            // Redraw input line only
                                             printf("\r\033[K");
-                                            display_prompt();
                                             printf("%s", input);
                                             for (int i = len; i > cursor; i--) {
                                                 printf("\033[D");
@@ -1327,9 +1406,8 @@ char* read_input_with_completion() {
                     cursor++;
                 }
                 
-                // Redraw line
+                // Redraw input line only
                 printf("\r\033[K");
-                display_prompt();
                 input[len] = '\0';
                 printf("%s", input);
                 for (int i = len; i > cursor; i--) {
@@ -1368,9 +1446,8 @@ char* read_input_with_completion() {
                 len--;
                 cursor--;
                 
-                // Redraw line
+                // Redraw input line only
                 printf("\r\033[K");
-                display_prompt();
                 input[len] = '\0';
                 printf("%s", input);
                 for (int i = len; i > cursor; i--) {
@@ -1394,9 +1471,8 @@ char* read_input_with_completion() {
                 len++;
                 cursor++;
                 
-                // Redraw from cursor position
+                // Redraw input line only
                 printf("\r\033[K");
-                display_prompt();
                 input[len] = '\0';
                 printf("%s", input);
                 for (int i = len; i > cursor; i--) {
@@ -1621,14 +1697,11 @@ int main(int argc, char** argv) {
     // Load directory bookmarks
     load_bookmarks();
     
-    printf("MyShell v3.0 - The Fun Shell!\n");
+    printf("MyShell v3.0 - The Fun Shell! ✨\n");
+    printf("══════════════════════════════════════════════════════════════\n");
     printf("Type 'help' for more information.\n");
-    printf("Press TAB for auto-completion, UP/DOWN for history.\n");
-    printf("Use LEFT/RIGHT arrows to move cursor, CTRL+LEFT/RIGHT to jump words.\n");
-    printf("🎉 NEW: Double-tap ESC to add 'sudo' at the beginning!\n");
-    printf("📌 NEW: Use 'mark' and 'jump' for directory bookmarks!\n");
-    printf("📝 NEW: Use 'note' to save session notes!\n");
-    printf("You can also evaluate arithmetic expressions (e.g., 2+3, 10*5).\n\n");
+    printf("📌 Bookmarks • 📝 Notes • 🚀 Smart Navigation • ⚡ Fast\n");
+    printf("══════════════════════════════════════════════════════════════\n\n");
     
     // Load .myshellrc configuration
     load_myshellrc();
