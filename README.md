@@ -3,6 +3,8 @@
 
 MyShell is a custom Unix-like command-line interpreter (shell) written in C. It supports standard command execution, command history, piping, input/output redirection, and includes advanced features like **Tab Completion** and a built-in **Arithmetic Evaluator**.
 
+<img width="1854" height="1048" alt="Image" src="https://github.com/user-attachments/assets/85f5bbe8-776c-4218-88fd-c2954721403c" />
+
 ## 🌟 Features
 
 MyShell is designed to be a powerful and user-friendly alternative shell, incorporating features typically found in modern shells:
