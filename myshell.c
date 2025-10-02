@@ -66,6 +66,9 @@ int builtin_note(char** args);
 int builtin_notes(char** args);
 int builtin_clearnotes(char** args);
 int builtin_delnote(char** args);
+int builtin_exec(char** args);
+int builtin_source(char** args);
+int builtin_type(char** args);
 int is_arithmetic_expression(char* str);
 double evaluate_expression(char* expr);
 void load_myshellrc();
@@ -100,7 +103,10 @@ char* builtin_names[] = {
     "note",
     "notes",
     "clearnotes",
-    "delnote"
+    "delnote",
+    "exec",
+    "source",
+    "type"
 };
 
 // Built-in command functions
@@ -116,7 +122,10 @@ int (*builtin_funcs[])(char**) = {
     &builtin_note,
     &builtin_notes,
     &builtin_clearnotes,
-    &builtin_delnote
+    &builtin_delnote,
+    &builtin_exec,
+    &builtin_source,
+    &builtin_type
 };
 
 int num_builtins() {
@@ -181,6 +190,10 @@ int builtin_help(char** args) {
     printf("  - notes: View all notes\n");
     printf("  - delnote <n>: Delete note number N\n");
     printf("  - clearnotes: Clear all notes\n");
+    printf("\nAdvanced Commands:\n");
+    printf("  - exec <cmd>: Replace shell with command\n");
+    printf("  - source <file>: Execute commands from file\n");
+    printf("  - type <cmd>: Show command type and location\n");
     return 1;
 }
 
@@ -726,6 +739,154 @@ int builtin_delnote(char** args) {
     return 1;
 }
 
+// Built-in: exec
+int builtin_exec(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: exec: missing command\n");
+        fprintf(stderr, "Usage: exec <command> [args...]\n");
+        return 1;
+    }
+    
+    // Save history before exec
+    save_history_to_file();
+    
+    // Expand aliases
+    char* expanded = expand_aliases(args[1]);
+    
+    // Execute the command, replacing the shell process
+    execvp(args[1], &args[1]);
+    
+    // If we get here, exec failed
+    perror("myshell: exec");
+    return 1;
+}
+
+// Built-in: source
+int builtin_source(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: source: missing filename\n");
+        fprintf(stderr, "Usage: source <file>\n");
+        return 1;
+    }
+    
+    FILE* f = fopen(args[1], "r");
+    if (!f) {
+        perror("myshell: source");
+        return 1;
+    }
+    
+    printf("Sourcing %s...\n", args[1]);
+    
+    char line[MAX_INPUT];
+    int line_num = 0;
+    int errors = 0;
+    
+    while (fgets(line, sizeof(line), f)) {
+        line_num++;
+        
+        // Remove newline
+        line[strcspn(line, "\n")] = 0;
+        
+        // Skip empty lines and comments
+        char* trimmed = line;
+        while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
+        if (*trimmed == '\0' || *trimmed == '#') continue;
+        
+        // Expand aliases
+        char* expanded = expand_aliases(trimmed);
+        
+        // Check if it's an arithmetic expression
+        if (is_arithmetic_expression(expanded)) {
+            double result = evaluate_expression(expanded);
+            if (result == (int)result) {
+                printf("%d\n", (int)result);
+            } else {
+                printf("%.2f\n", result);
+            }
+        } else {
+            // Parse and execute command
+            char** cmd_args = parse_input(strdup(expanded));
+            if (cmd_args[0] != NULL) {
+                // Execute command silently unless it's echo or similar
+                int status = execute_command(cmd_args);
+                if (status == 0) {
+                    fprintf(stderr, "myshell: source: line %d: command failed\n", line_num);
+                    errors++;
+                }
+            }
+            free(cmd_args);
+        }
+    }
+    
+    fclose(f);
+    
+    if (errors > 0) {
+        printf("⚠️  Sourced %s with %d error(s)\n", args[1], errors);
+    } else {
+        printf("✅ Successfully sourced %s\n", args[1]);
+    }
+    
+    return 1;
+}
+
+// Built-in: type
+int builtin_type(char** args) {
+    if (args[1] == NULL) {
+        fprintf(stderr, "myshell: type: missing argument\n");
+        fprintf(stderr, "Usage: type <command>\n");
+        return 1;
+    }
+    
+    char* cmd = args[1];
+    
+    // Check if it's a builtin
+    for (int i = 0; i < num_builtins(); i++) {
+        if (strcmp(cmd, builtin_names[i]) == 0) {
+            printf("%s is a shell builtin\n", cmd);
+            return 1;
+        }
+    }
+    
+    // Check if it's an alias
+    char* alias_value = get_alias(cmd);
+    if (alias_value) {
+        printf("%s is aliased to `%s'\n", cmd, alias_value);
+        return 1;
+    }
+    
+    // Search in PATH
+    char* path_env = getenv("PATH");
+    if (!path_env) {
+        printf("%s: not found\n", cmd);
+        return 1;
+    }
+    
+    char* path = strdup(path_env);
+    char* dir = strtok(path, ":");
+    
+    int found = 0;
+    while (dir) {
+        char full_path[2048];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, cmd);
+        
+        if (access(full_path, X_OK) == 0) {
+            printf("%s is %s\n", cmd, full_path);
+            found = 1;
+            break;
+        }
+        
+        dir = strtok(NULL, ":");
+    }
+    
+    free(path);
+    
+    if (!found) {
+        printf("%s: not found\n", cmd);
+    }
+    
+    return 1;
+}
+
 // Check if string is an arithmetic expression
 int is_arithmetic_expression(char* str) {
     if (str == NULL || strlen(str) == 0) return 0;
@@ -1096,6 +1257,99 @@ char** get_completions(char* partial, int* count) {
 }
 
 // Display shell prompt
+// void display_prompt() {
+//     char cwd[1024];
+//     char hostname[256];
+//     char* username = getenv("USER");
+    
+//     // Get current working directory
+//     if (getcwd(cwd, sizeof(cwd)) == NULL) {
+//         strcpy(cwd, "?");
+//     }
+    
+//     // Get hostname
+//     if (gethostname(hostname, sizeof(hostname)) != 0) {
+//         strcpy(hostname, "localhost");
+//     }
+    
+//     // Replace home directory with ~
+//     char* home = getenv("HOME");
+//     char display_path[1024];
+//     if (home && strncmp(cwd, home, strlen(home)) == 0) {
+//         snprintf(display_path, sizeof(display_path), "~%s", cwd + strlen(home));
+//     } else {
+//         strcpy(display_path, cwd);
+//     }
+    
+//     // Get git branch if in a git repo
+//     char git_branch[128] = "";
+//     FILE* git = popen("git branch --show-current 2>/dev/null", "r");
+//     if (git) {
+//         if (fgets(git_branch, sizeof(git_branch), git)) {
+//             git_branch[strcspn(git_branch, "\n")] = 0;
+//         }
+//         pclose(git);
+//     }
+    
+//     // Check git status
+//     char git_status[16] = "";
+//     if (strlen(git_branch) > 0) {
+//         FILE* status = popen("git status --porcelain 2>/dev/null | wc -l", "r");
+//         if (status) {
+//             int changes = 0;
+//             if (fscanf(status, "%d", &changes) == 1 && changes > 0) {
+//                 strcpy(git_status, "✗");
+//             } else {
+//                 strcpy(git_status, "✓");
+//             }
+//             pclose(status);
+//         }
+//     }
+    
+//     // Time
+//     time_t now = time(NULL);
+//     struct tm* t = localtime(&now);
+//     char time_str[32];
+//     strftime(time_str, sizeof(time_str), "%H:%M:%S", t);
+    
+//     // Build the prompt with Nerd Font icons
+//     // Line 1: User, host, time
+//     printf("\033[1;36m╭─\033[0m"); // Cyan top-left corner
+//     printf("\033[1;35m \033[0m", username ? username : "user"); // Purple user icon
+//     printf("\033[1;37m%s\033[0m", username ? username : "user"); // White username
+//     printf("\033[1;30m@\033[0m"); // Gray @
+//     printf("\033[1;32m󰒋 \033[0m", hostname); // Green computer icon
+//     printf("\033[1;37m%s\033[0m", hostname); // White hostname
+//     printf(" \033[1;34m \033[0m", time_str); // Blue clock icon
+//     printf("\033[1;90m%s\033[0m", time_str); // Gray time
+//     printf("\n");
+    
+//     // Line 2: Directory and git info
+//     printf("\033[1;36m├─\033[0m"); // Cyan middle connector
+//     printf("\033[1;34m  \033[0m", display_path); // Blue folder icon
+//     printf("\033[1;33m%s\033[0m", display_path); // Yellow path
+    
+//     if (strlen(git_branch) > 0) {
+//         printf(" \033[1;35m \033[0m", git_branch); // Purple git branch icon
+//         printf("\033[1;37m%s\033[0m", git_branch); // White branch name
+        
+//         if (strlen(git_status) > 0) {
+//             if (strcmp(git_status, "✓") == 0) {
+//                 printf(" \033[1;32m%s\033[0m", git_status); // Green checkmark
+//             } else {
+//                 printf(" \033[1;31m%s\033[0m", git_status); // Red X
+//             }
+//         }
+//     }
+//     printf("\n");
+    
+//     // Line 3: Input line with prompt character
+//     // printf("\033[1;36m╰─\033[0m"); // Cyan bottom-left corner
+//     // printf("\033[1;32m❯\033[0m "); // Green arrow
+    
+//     fflush(stdout);
+// }
+
 void display_prompt() {
     char cwd[1024];
     char hostname[256];
